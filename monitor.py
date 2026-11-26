@@ -1,6 +1,7 @@
 import html
 import json
 import os
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -9,7 +10,7 @@ TOKEN_URL = "https://sso.earthlink.iq/auth/realms/globaltek/protocol/openid-conn
 CLIENT_ID = "gtk-client"
 BOARD_VIEW_URL = "https://fmsapi.el.earthlink.iq/api/tasks/tasks/board-view"
 
-# أضف هنا أي taskGroup إضافي إذا كان لـ FOC Maintenance معرّف مجموعة مستقل
+# أضف هنا أي taskGroup إضافي لـ FOC Maintenance إذا كان له معرّف مستقل
 TASK_GROUP_IDS = [
     "760cb42f-796d-753d-154d-6d22a88b3244",  # GT-FTTH Fiber Maintenance (Sabah)
 ]
@@ -18,11 +19,13 @@ STATE_FILE = "seen_tasks.json"
 BAGHDAD_TZ = timezone(timedelta(hours=3))
 
 
-def refresh_access_token(refresh_token: str) -> str:
+def get_access_token_by_password(username: str, password: str) -> str:
     data = urllib.parse.urlencode({
-        "grant_type": "refresh_token",
+        "grant_type": "password",
         "client_id": CLIENT_ID,
-        "refresh_token": refresh_token,
+        "username": username,
+        "password": password,
+        "scope": "openid profile email",
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -35,12 +38,17 @@ def refresh_access_token(refresh_token: str) -> str:
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
-        token = payload.get("access_token")
-        if not token:
-            raise RuntimeError("لم يتم استلام access_token من سيرفر المصادقة")
-        return token
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"فشل تسجيل الدخول المباشر ({e.code}): {err_body}") from e
+
+    token = payload.get("access_token")
+    if not token:
+        raise RuntimeError("لم يتم استلام access_token من سيرفر المصادقة")
+    return token
 
 
 def fetch_tasks(access_token: str) -> list[dict]:
@@ -189,13 +197,10 @@ def main() -> None:
     chat_sabah = os.environ.get("TG_CHAT_ID_SABAH", "").strip()
     chat_foc = os.environ.get("TG_CHAT_ID_FOC", "").strip()
 
-    access_token = os.environ.get("G2F_ACCESS_TOKEN", "").strip()
-    refresh_token = os.environ.get("G2F_REFRESH_TOKEN", "").strip()
+    username = os.environ["G2F_USERNAME"].strip()
+    password = os.environ["G2F_PASSWORD"]
 
-    if refresh_token:
-        access_token = refresh_access_token(refresh_token)
-    elif not access_token:
-        raise RuntimeError("يجب توفير G2F_REFRESH_TOKEN أو G2F_ACCESS_TOKEN في Secrets")
+    access_token = get_access_token_by_password(username, password)
 
     items = fetch_tasks(access_token)
     seen = load_state()
@@ -207,7 +212,6 @@ def main() -> None:
             continue
 
         status = (((task.get("status") or {}).get("displayValue")) or "").strip()
-        # يرسل فقط المهام الموجودة في عمود New
         if status.lower() != "new":
             continue
 
