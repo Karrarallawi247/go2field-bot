@@ -7,10 +7,9 @@ TOKEN_URL = "https://sso.earthlink.iq/auth/realms/globaltek/protocol/openid-conn
 CLIENT_ID = "gtk-client"
 BOARD_VIEW_URL = "https://fmsapi.el.earthlink.iq/api/tasks/tasks/board-view"
 
-# غيّر أو أضف معرّفات المجموعات (taskGroups) حسب البوردات المطلوبة
+# أضف هنا أي taskGroup إضافي إذا كان لـ FOC Maintenance معرّف مجموعة مستقل
 TASK_GROUP_IDS = [
     "760cb42f-796d-753d-154d-6d22a88b3244",  # GT-FTTH Fiber Maintenance (Sabah)
-    # أضف هنا UUID الخاص بـ FOC Maintenance إذا كان له taskGroup مستقل
 ]
 
 STATE_FILE = "seen_tasks.json"
@@ -77,6 +76,8 @@ def classify_board(task: dict) -> str | None:
 
 
 def send_telegram(bot_token: str, chat_id: str, text: str) -> None:
+    if not chat_id:
+        return
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = json.dumps({
         "chat_id": chat_id,
@@ -109,7 +110,8 @@ def save_state(state: dict) -> None:
 
 def main() -> None:
     tg_token = os.environ["TG_BOT_TOKEN"]
-    tg_chat_id = os.environ["TG_CHAT_ID"]
+    chat_sabah = os.environ.get("TG_CHAT_ID_SABAH", "").strip()
+    chat_foc = os.environ.get("TG_CHAT_ID_FOC", "").strip()
 
     access_token = os.environ.get("G2F_ACCESS_TOKEN", "").strip()
     refresh_token = os.environ.get("G2F_REFRESH_TOKEN", "").strip()
@@ -121,7 +123,8 @@ def main() -> None:
 
     items = fetch_tasks(access_token)
     seen = load_state()
-    notifications = []
+    # كل عنصر يكون (board_name, message_text)
+    notifications: list[tuple[str, str]] = []
 
     for task in items:
         board_name = classify_board(task)
@@ -139,32 +142,35 @@ def main() -> None:
             s.get("displayValue") for s in (task.get("sites") or []) if s.get("displayValue")
         ) or "-"
 
-        signature = f"{status}|{sites}|{task_type}"
+        signature = f"{board_name}|{status}|{sites}|{task_type}"
         prev_signature = seen.get(task_id)
 
         if prev_signature is None:
-            notifications.append(
+            msg = (
                 f"🆕 <b>مهمة جديدة — {board_name}</b>\n"
                 f"• الكود: <code>{task_code}</code>\n"
                 f"• النوع: {task_type}\n"
                 f"• الحالة: {status}\n"
                 f"• الموقع: {sites}"
             )
+            notifications.append((board_name, msg))
             seen[task_id] = signature
         elif prev_signature != signature:
-            notifications.append(
+            msg = (
                 f"🔄 <b>تحديث مهمة — {board_name}</b>\n"
                 f"• الكود: <code>{task_code}</code>\n"
                 f"• النوع: {task_type}\n"
                 f"• الحالة: {status}\n"
                 f"• الموقع: {sites}"
             )
+            notifications.append((board_name, msg))
             seen[task_id] = signature
 
     save_state(seen)
 
-    for msg in notifications:
-        send_telegram(tg_token, tg_chat_id, msg)
+    for board_name, msg in notifications:
+        target_chat = chat_sabah if board_name == "Sabah" else chat_foc
+        send_telegram(tg_token, target_chat, msg)
 
 
 if __name__ == "__main__":
