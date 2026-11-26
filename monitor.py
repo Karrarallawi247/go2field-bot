@@ -10,9 +10,9 @@ TOKEN_URL = "https://sso.earthlink.iq/auth/realms/globaltek/protocol/openid-conn
 CLIENT_ID = "gtk-client"
 BOARD_VIEW_URL = "https://fmsapi.el.earthlink.iq/api/tasks/tasks/board-view"
 
-# أضف هنا أي taskGroup إضافي لـ FOC Maintenance إذا كان له معرّف مستقل
 TASK_GROUP_IDS = [
     "760cb42f-796d-753d-154d-6d22a88b3244",  # GT-FTTH Fiber Maintenance (Sabah)
+    "3874629e-d2a3-4aeb-b145-d0cc44dce80c",  # FOC Maintenance
 ]
 
 STATE_FILE = "seen_tasks.json"
