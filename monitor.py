@@ -1,6 +1,7 @@
 import html
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -159,7 +160,7 @@ def build_message(task: dict) -> str:
     )
 
 
-def send_telegram(bot_token: str, chat_id: str, text: str) -> None:
+def send_telegram(bot_token: str, chat_id: str, text: str, max_retries: int = 4) -> None:
     if not chat_id:
         return
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -170,14 +171,32 @@ def send_telegram(bot_token: str, chat_id: str, text: str) -> None:
         "disable_web_page_preview": True,
     }).encode("utf-8")
 
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        resp.read()
+    for attempt in range(max_retries):
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                resp.read()
+            time.sleep(1.5)
+            return
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            if e.code == 429 and attempt < max_retries - 1:
+                retry_after = 5
+                try:
+                    err_json = json.loads(body)
+                    retry_after = int(
+                        (err_json.get("parameters") or {}).get("retry_after", 5)
+                    )
+                except Exception:
+                    pass
+                time.sleep(max(retry_after, 2) + 1)
+                continue
+            raise RuntimeError(f"فشل إرسال رسالة تيليغرام ({e.code}): {body}") from e
 
 
 def load_state() -> dict:
@@ -204,7 +223,8 @@ def main() -> None:
 
     items = fetch_tasks(access_token)
     seen = load_state()
-    notifications: list[tuple[str, str]] = []
+    notifications: list[tuple[str, str, str]] = []
+    batch_seen_ids: set[str] = set()
 
     for task in items:
         board_name = classify_board(task)
@@ -216,18 +236,18 @@ def main() -> None:
             continue
 
         task_id = str((task.get("self") or {}).get("id") or task.get("taskCode") or "")
-        if not task_id or task_id in seen:
+        if not task_id or task_id in seen or task_id in batch_seen_ids:
             continue
 
+        batch_seen_ids.add(task_id)
         msg = build_message(task)
-        notifications.append((board_name, msg))
-        seen[task_id] = status
+        notifications.append((task_id, board_name, msg))
 
-    save_state(seen)
-
-    for board_name, msg in notifications:
+    for task_id, board_name, msg in notifications:
         target_chat = chat_sabah if board_name == "Sabah" else chat_foc
         send_telegram(tg_token, target_chat, msg)
+        seen[task_id] = "New"
+        save_state(seen)
 
 
 if __name__ == "__main__":
