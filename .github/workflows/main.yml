@@ -1,48 +1,48 @@
-name: Go2Field Monitor
+- name: Save seen_tasks.json
+     run: |
+       git config user.name "github-actions[bot]"
+       git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-on:
-  schedule:
-    - cron: "*/5 * * * *"
-  workflow_dispatch:
+       python - << 'EOF'
+       import json, subprocess
 
-concurrency:
-  group: go2field-monitor-single-run
-  cancel-in-progress: false
+       with open("seen_tasks.json", "r", encoding="utf-8") as f:
+           local_state = json.load(f)
 
-permissions:
-  contents: write
+       try:
+           remote_raw = subprocess.check_output(
+               ["git", "show", "origin/main:seen_tasks.json"],
+               stderr=subprocess.DEVNULL,
+               text=True,
+           )
+           remote_state = json.loads(remote_raw)
+       except Exception:
+           remote_state = {}
 
-jobs:
-  run-monitor:
-    runs-on: ubuntu-latest
+       merged = {**remote_state, **local_state}
+       with open("seen_tasks.json", "w", encoding="utf-8") as f:
+           json.dump(merged, f, ensure_ascii=False, indent=2)
+       EOF
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Run monitor script
-        env:
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID_SABAH: ${{ secrets.TG_CHAT_ID_SABAH }}
-          TG_CHAT_ID_FOC: ${{ secrets.TG_CHAT_ID_FOC }}
-          G2F_USERNAME: ${{ secrets.G2F_USERNAME }}
-          G2F_PASSWORD: ${{ secrets.G2F_PASSWORD }}
-        run: python monitor.py
-
-      - name: Save seen_tasks.json
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add seen_tasks.json
-          if git diff --staged --quiet; then
-            echo "No changes to seen_tasks.json"
-          else
-            git commit -m "Update seen_tasks.json [skip ci]"
-            git pull --rebase origin main
-            git push
-          fi
+       git add seen_tasks.json
+       if git diff --staged --quiet; then
+         echo "No changes to seen_tasks.json"
+       else
+         git commit -m "Update seen_tasks.json [skip ci]"
+         for i in 1 2 3; do
+           git fetch origin main
+           git rebase origin/main && git push && break
+           git rebase --abort || true
+           python - << 'EOF'
+       import json, subprocess
+       with open("seen_tasks.json", "r", encoding="utf-8") as f:
+           local_state = json.load(f)
+       remote_raw = subprocess.check_output(["git", "show", "origin/main:seen_tasks.json"], text=True)
+       remote_state = json.loads(remote_raw)
+       with open("seen_tasks.json", "w", encoding="utf-8") as f:
+           json.dump({**remote_state, **local_state}, f, ensure_ascii=False, indent=2)
+       EOF
+           git add seen_tasks.json
+           git commit --amend --no-edit
+         done
+       fi
