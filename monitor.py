@@ -16,6 +16,10 @@ TASK_GROUP_IDS = [
     "3874629e-d2a3-4aeb-b145-d0cc44dce80c",  # FOC Maintenance
 ]
 
+NAJAF_GOVERNORATE_IDS = [
+    "9efa6a8e-986b-450b-b9c6-128013e09c55",  # النجف
+]
+
 STATE_FILE = "seen_tasks.json"
 BAGHDAD_TZ = timezone(timedelta(hours=3))
 
@@ -56,6 +60,8 @@ def fetch_tasks(access_token: str) -> list[dict]:
     params = [("pageSize", "250"), ("pageNumber", "1")]
     for gid in TASK_GROUP_IDS:
         params.append(("taskGroups", gid))
+    for gov_id in NAJAF_GOVERNORATE_IDS:
+        params.append(("governorateIds", gov_id))
 
     url = f"{BOARD_VIEW_URL}?{urllib.parse.urlencode(params)}"
     req = urllib.request.Request(
@@ -85,6 +91,43 @@ def classify_board(task: dict) -> str | None:
     if "sabah" in combined:
         return "Sabah"
     return None
+
+
+def is_najaf_task(task: dict) -> bool:
+    raw_blob = json.dumps(task, ensure_ascii=False).lower()
+
+    # استبعاد صريح إذا ظهرت أسماء محافظات أخرى ولم يظهر اسم النجف
+    other_provinces = (
+        "baghdad", "بغداد",
+        "basra", "بصرة", "البصرة",
+        "karbala", "كربلاء",
+        "babylon", "babil", "بابل", "حلة", "الحلة",
+        "diwaniyah", "qadisiyah", "ديوانية", "الديوانية", "قادسية",
+        "wasit", "واسط", "كوت", "الكوت",
+        "maysan", "ميسان", "عمارة", "العمارة",
+        "dhi qar", "ذي قار", "nasiriyah", "ناصرية", "الناصرية",
+        "muthanna", "مثنى", "المثنى", "samawah", "سماوة",
+        "anbar", "انبار", "الأنبار", "ramadi", "fallujah",
+        "diyala", "ديالى",
+        "kirkuk", "كركوك",
+        "erbil", "اربيل", "أربيل",
+        "sulaymaniyah", "سليمانية", "السليمانية",
+        "duhok", "دهوك",
+        "ninawa", "nineveh", "نينوى", "mosul", "موصل",
+        "tikrit", "salah al-din", "صلاح الدين",
+    )
+
+    has_najaf_word = ("najaf" in raw_blob) or ("نجف" in raw_blob) or ("النجف" in raw_blob)
+    has_najaf_gov_id = any(gid.lower() in raw_blob for gid in NAJAF_GOVERNORATE_IDS)
+
+    if has_najaf_word or has_najaf_gov_id:
+        return True
+
+    if any(p in raw_blob for p in other_provinces):
+        return False
+
+    # إذا لم يذكر اسم محافظة صراحة، نعتمد على فلتر governorateIds المرسل للـ API
+    return True
 
 
 def format_start_date(raw_date: str | None) -> str:
@@ -229,6 +272,9 @@ def main() -> None:
     for task in items:
         board_name = classify_board(task)
         if not board_name:
+            continue
+
+        if board_name == "FOC Maintenance" and not is_najaf_task(task):
             continue
 
         status = (((task.get("status") or {}).get("displayValue")) or "").strip()
