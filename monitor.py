@@ -11,12 +11,20 @@ TOKEN_URL = "https://sso.earthlink.iq/auth/realms/globaltek/protocol/openid-conn
 CLIENT_ID = "gtk-client"
 BOARD_VIEW_URL = "https://fmsapi.el.earthlink.iq/api/tasks/tasks/board-view"
 
-TASK_GROUP_IDS = [
-    "760cb42f-796d-753d-154d-6d22a88b3244",  # GT-FTTH Fiber Maintenance (Sabah)
-    "3874629e-d2a3-4aeb-b145-d0cc44dce80c",  # FOC Maintenance
+SABAH_GROUP_ID = "760cb42f-796d-753d-154d-6d22a88b3244"  # GT-FTTH Fiber Maintenance (Sabah)
+FOC_GROUP_ID = "3874629e-d2a3-4aeb-b145-d0cc44dce80c"    # FM FOC Maintenance
+
+FOC_NAJAF_GOVERNORATE_IDS = [
+    "9efa6a8e-986b-450b-b9c6-128013e09c55",
 ]
 
-NAJAF_ID = "9efa6a8e-986b-450b-b9c6-128013e09c55"
+FOC_NAJAF_DISTRICT_IDS = [
+    "587577b0-3727-4130-a981-b48e6f8e25f4",
+    "7eeac991-3874-486e-8b28-ee4753c9e793",
+    "969bc7b7-bdc5-4fe0-b7a7-72c847dcf6d7",
+    "9e6928d6-eabc-4eb6-b01a-56640a62b01b",
+    "a3f18abf-5c54-4260-9105-853ebfa3b11d",
+]
 
 STATE_FILE = "seen_tasks.json"
 BAGHDAD_TZ = timezone(timedelta(hours=3))
@@ -54,11 +62,7 @@ def get_access_token_by_password(username: str, password: str) -> str:
     return token
 
 
-def fetch_tasks(access_token: str) -> list[dict]:
-    params = [("pageSize", "250"), ("pageNumber", "1")]
-    for gid in TASK_GROUP_IDS:
-        params.append(("taskGroups", gid))
-
+def _request_board_view(access_token: str, params: list[tuple[str, str]]) -> list[dict]:
     url = f"{BOARD_VIEW_URL}?{urllib.parse.urlencode(params)}"
     req = urllib.request.Request(
         url,
@@ -75,6 +79,33 @@ def fetch_tasks(access_token: str) -> list[dict]:
         return data.get("items", [])
 
 
+def fetch_tasks(access_token: str) -> list[dict]:
+    all_items: list[dict] = []
+
+    # 1. تاسكات لوحة الصباح
+    sabah_params = [
+        ("taskGroups", SABAH_GROUP_ID),
+        ("pageSize", "250"),
+        ("pageNumber", "1"),
+    ]
+    all_items.extend(_request_board_view(access_token, sabah_params))
+
+    # 2. تاسكات لوحة FOC مفلترة على النجف وأقضيتها
+    foc_params = [
+        ("taskGroups", FOC_GROUP_ID),
+        ("pageSize", "250"),
+        ("pageNumber", "1"),
+    ]
+    for gov_id in FOC_NAJAF_GOVERNORATE_IDS:
+        foc_params.append(("governorateIds", gov_id))
+    for dist_id in FOC_NAJAF_DISTRICT_IDS:
+        foc_params.append(("districtIds", dist_id))
+
+    all_items.extend(_request_board_view(access_token, foc_params))
+
+    return all_items
+
+
 def classify_board(task: dict) -> str | None:
     groups_text = " ".join(
         (g.get("displayValue") or "") for g in (task.get("groups") or [])
@@ -87,38 +118,6 @@ def classify_board(task: dict) -> str | None:
     if "sabah" in combined:
         return "Sabah"
     return None
-
-
-def is_najaf_task(task: dict) -> bool:
-    raw_blob = json.dumps(task, ensure_ascii=False).lower()
-
-    if ("najaf" in raw_blob) or ("نجف" in raw_blob) or ("النجف" in raw_blob) or (NAJAF_ID.lower() in raw_blob):
-        return True
-
-    # إذا لم يذكر اسم النجف، نتحقق هل يوجد ذكر لمحافظة أخرى واضحة
-    other_provinces = (
-        "baghdad", "بغداد",
-        "basra", "بصرة", "البصرة",
-        "karbala", "كربلاء",
-        "babylon", "babil", "بابل", "حلة", "الحلة",
-        "diwaniyah", "qadisiyah", "ديوانية", "الديوانية",
-        "wasit", "واسط", "كوت", "الكوت",
-        "maysan", "ميسان", "عمارة", "العمارة",
-        "dhi qar", "ذي قار", "nasiriyah", "ناصرية", "الناصرية",
-        "muthanna", "مثنى", "المثنى",
-        "anbar", "انبار", "الأنبار",
-        "diyala", "ديالى",
-        "kirkuk", "كركوك",
-        "erbil", "اربيل", "أربيل",
-        "sulaymaniyah", "سليمانية", "السليمانية",
-        "duhok", "دهوك",
-        "ninawa", "nineveh", "نينوى", "mosul", "موصل",
-        "salah al-din", "صلاح الدين",
-    )
-    if any(p in raw_blob for p in other_provinces):
-        return False
-
-    return True
 
 
 def format_start_date(raw_date: str | None) -> str:
@@ -143,7 +142,7 @@ def extract_leader(task: dict) -> str:
         if isinstance(val, str) and val.strip():
             return val.strip()
 
-    assignees = task.get("assignees") or task.get("leaders") or []
+    assignees = task.get("assignees") or task.get("leaders") or task.get("teams") or []
     if isinstance(assignees, list) and assignees:
         names = [
             a.get("displayValue") if isinstance(a, dict) else str(a)
@@ -162,7 +161,11 @@ def build_message(task: dict) -> str:
     ]
     board_title = ", ".join(groups_list) if groups_list else "-"
     task_code = task.get("taskCode") or "-"
-    description = (task.get("description") or "").strip() or "-"
+    description = (
+        task.get("description")
+        or ((task.get("self") or {}).get("displayValue"))
+        or ""
+    ).strip() or "-"
     title_ref = (
         task.get("title")
         or task.get("subject")
@@ -177,7 +180,10 @@ def build_message(task: dict) -> str:
     ) or "-"
     leader = extract_leader(task)
     start_date = format_start_date(
-        task.get("startDate") or task.get("createdDate") or task.get("creationDate")
+        task.get("startOn")
+        or task.get("startDate")
+        or task.get("createdDate")
+        or task.get("creationDate")
     )
 
     return (
@@ -263,9 +269,6 @@ def main() -> None:
     for task in items:
         board_name = classify_board(task)
         if not board_name:
-            continue
-
-        if board_name == "FOC Maintenance" and not is_najaf_task(task):
             continue
 
         status = (((task.get("status") or {}).get("displayValue")) or "").strip()
