@@ -5,6 +5,10 @@ on:
     - cron: "*/5 * * * *"
   workflow_dispatch:
 
+concurrency:
+  group: go2field-monitor-single-run
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
