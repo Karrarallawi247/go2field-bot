@@ -26,7 +26,8 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID_SABAH: ${{ secrets.TG_CHAT_ID_SABAH }}
           TG_CHAT_ID_FOC: ${{ secrets.TG_CHAT_ID_FOC }}
-          G2F_REFRESH_TOKEN: ${{ secrets.G2F_REFRESH_TOKEN }}
+          G2F_USERNAME: ${{ secrets.G2F_USERNAME }}
+          G2F_PASSWORD: ${{ secrets.G2F_PASSWORD }}
         run: python monitor.py
 
       - name: Save seen_tasks.json
